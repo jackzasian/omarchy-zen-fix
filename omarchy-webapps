@@ -22,6 +22,9 @@ omarchy-webapps <command>
   relink     Point existing web app .desktop entries at this launcher (absolute)
   list       List web apps the browser has registered (Taskbar Tabs backends)
   hypr-rules Print Hyprland window rules for per-app web app windows
+  hypr-helpers
+             Print Lua overrides that make { webapp = ... } keybindings use this
+             launcher (append to ~/.config/hypr/bindings.lua, before the binds)
   chrome-css Install/remove the chrome-less styling for Gecko Taskbar Tabs
              (chrome-css install | chrome-css remove)
   path-shim  Make packaged Omarchy callers that use the bare command name reach
@@ -361,6 +364,49 @@ o.window("^(${prgname}\\\\.webapp-)", {
 RULES
 }
 
+# Omarchy's own Hyprland helpers build `omarchy-launch-webapp <url>` as a bare
+# command name, and Hyprland's exec PATH puts /usr/share/omarchy/bin first -- so
+# every { webapp = ... } keybinding reaches the packaged Chromium launcher. There
+# is no .desktop file to relink and no way to edit the packaged helpers, so the
+# fix is to override the two helper functions in the user's own bindings.lua.
+#
+# `omarchy-launch-or-focus-webapp` needs the wrapper rather than a direct path:
+# it re-resolves omarchy-launch-webapp by bare name internally.
+cmd_hypr_helpers() {
+  local sole="omarchy-launch-or-focus-webapp" sole_path
+  if ensure_handler_wrapper "$sole"; then
+    sole_path="$OW_GEN_BIN_DIR/$sole"
+  else
+    sole_path="$OW_PACKAGED_BIN/$sole"
+  fi
+
+  cat <<LUA
+-- omarchy-webapps: name the web app launcher by absolute path.
+--
+-- Hyprland's exec PATH puts /usr/share/omarchy/bin first, so the bare command
+-- name in Omarchy's helpers resolves to the packaged Chromium-only launcher.
+-- Overriding these two functions fixes every { webapp = ... } binding at once.
+-- Must come BEFORE the o.bind() calls that use them.
+
+-- Shell single-quoting. Built from char codes (39 = apostrophe, 92 = backslash)
+-- so no layer of Lua or shell escaping can mangle it.
+local ow_q = string.char(39)
+local ow_esc = ow_q .. string.char(92) .. ow_q .. ow_q
+
+local function ow_quote(s)
+  return ow_q .. (tostring(s):gsub(ow_q, ow_esc)) .. ow_q
+end
+
+function o.launch_webapp(url)
+  return "$OW_BIN_DIR/omarchy-launch-webapp " .. ow_quote(url)
+end
+
+function o.launch_webapp_sole(name, url)
+  return "$sole_path " .. ow_quote(name) .. " " .. ow_quote(url)
+end
+LUA
+}
+
 cmd_chrome_css() {
   load_config
   ow_resolve_browser || die "no browser resolved"
@@ -402,6 +448,7 @@ doctor)     shift; cmd_doctor "$@" ;;
 relink)     shift; cmd_relink "$@" ;;
 list)       shift; cmd_list "$@" ;;
 hypr-rules) shift; cmd_hypr_rules "$@" ;;
+hypr-helpers) shift; cmd_hypr_helpers "$@" ;;
 chrome-css) shift; cmd_chrome_css "$@" ;;
 path-shim)  shift; cmd_path_shim "$@" ;;
 version|--version|-V) printf '%s %s\n' "$OW_NAME" "$OW_VERSION" ;;

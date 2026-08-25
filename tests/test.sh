@@ -214,6 +214,36 @@ t_path_shim() {
   ok "path-shim install/remove roundtrip, shadows exactly one command"
 }
 
+t_hypr_helpers() {
+  local state="$TMP/state5" pkg="$TMP/pkgbin5" out
+  mkdir -p "$pkg"
+  printf '#!/bin/bash\nexec omarchy-launch-webapp x\n' >"$pkg/omarchy-launch-or-focus-webapp"
+  chmod +x "$pkg/omarchy-launch-or-focus-webapp"
+
+  out=$(env OW_STATE_DIR="$state" OW_PACKAGED_BIN="$pkg" "$ROOT/omarchy-webapps" hypr-helpers)
+
+  [[ $out == *"$ROOT/bin/omarchy-launch-webapp "* ]] \
+    || { bad "hypr-helpers should emit the launcher by absolute path"; return; }
+  [[ $out == *"$state/bin/omarchy-launch-or-focus-webapp "* ]] \
+    || { bad "hypr-helpers should point the sole variant at the generated wrapper"; return; }
+  [[ $out != *'"omarchy-launch-webapp'* ]] \
+    || { bad "hypr-helpers must not emit a bare command name"; return; }
+
+  # The snippet is Lua that gets pasted into bindings.lua, so it must parse and
+  # its quoting must survive a value containing an apostrophe.
+  if command -v lua >/dev/null 2>&1; then
+    printf 'local o = {}\n%s\nprint(o.launch_webapp("https://x.com/a b"))\nprint(o.launch_webapp_sole("it%ss", "u"))\n' \
+      "$out" "'" >"$TMP/helpers.lua"
+    local rendered
+    rendered=$(lua "$TMP/helpers.lua") || { bad "hypr-helpers snippet is not valid Lua"; return; }
+    [[ $rendered == *"'https://x.com/a b'"* ]] \
+      || { bad "hypr-helpers should single-quote the url (got: $rendered)"; return; }
+    [[ $rendered == *"'it'\\''s'"* ]] \
+      || { bad "hypr-helpers should escape an embedded apostrophe (got: $rendered)"; return; }
+  fi
+  ok "hypr-helpers emits absolute paths + valid Lua with correct shell quoting"
+}
+
 t_browser_family
 t_taskbartab_lookup
 t_gecko_default_profile
@@ -221,6 +251,7 @@ t_relink
 t_relink_adopts_handlers
 t_relink_quoted_exec
 t_path_shim
+t_hypr_helpers
 t_gecko_has_taskbartabs
 
 printf '\n'

@@ -107,6 +107,24 @@ property. If an earlier file sets opacity by tag, this rule must load after it o
 the tag-based opacity wins. Note `class:zen` rules do **not** match web app
 windows.
 
+### Keybindings
+
+Omarchy's `{ webapp = url }` binding helper builds a **bare** `omarchy-launch-webapp`
+command, and Hyprland's exec PATH puts `/usr/share/omarchy/bin` first — so every
+web app keybinding reaches the packaged Chromium launcher. There is no `.desktop`
+file to relink and the packaged helpers must not be edited, so override the two
+helper functions in your own `bindings.lua`:
+
+```bash
+omarchy-webapps hypr-helpers >> ~/.config/hypr/bindings.lua
+```
+
+Then move the block **above** your `o.bind(...)` calls — `o.bind` resolves the
+helper at bind time, so the override has to be defined first. `hyprctl reload`
+applies it with no logout. Raw-string bindings that spell the command out
+themselves are not covered; call `o.launch_webapp_sole(name, url)` in those
+instead.
+
 ## The PATH trap
 
 `~/.local/bin` does not reliably shadow Omarchy's bin:
