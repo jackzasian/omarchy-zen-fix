@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Watch for the desktop entry a Gecko browser writes when it creates a Taskbar
+# Tab, and mark it NoDisplay so it does not duplicate the launcher entry that
+# triggered the launch. Runs in the background for at most a minute; a web app is
+# only ever created once per host, so this is a first-launch-only cost.
+
+set -euo pipefail
+
+APPS=${OW_APPS_DIR:-"${XDG_DATA_HOME:-$HOME/.local/share}/applications"}
+started=$(date +%s)
+
+for _ in $(seq 1 60); do
+  sleep 1
+  for entry in "$APPS"/*.webapp-*.desktop; do
+    [[ -f $entry ]] || continue
+    # only entries created since this watcher started
+    (( $(stat -c %Y "$entry") >= started )) || continue
+    grep -q '^NoDisplay=' "$entry" && continue
+    printf 'NoDisplay=true\n' >>"$entry"
+    exit 0
+  done
+done

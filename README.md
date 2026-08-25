@@ -1,0 +1,163 @@
+# omarchy-webapps
+
+Run Omarchy web apps in the browser you actually use — Zen/Firefox Taskbar Tabs or Chromium `--app=`, instead of always Chromium.
+
+## The problem
+
+Omarchy ships `/usr/share/omarchy/bin/omarchy-launch-webapp`, which only understands
+Chromium's `--app=` flag. For every other browser it silently falls back to
+`chromium.desktop`, so with Zen (or any Gecko browser) as the default, web apps
+never open in the browser you actually use. This project replaces that launcher
+and routes to the best backend the chosen browser really supports.
+
+## Quick start
+
+```bash
+# From repo
+./install.sh
+
+# After install
+omarchy-webapps doctor
+```
+
+## Commands
+
+| Command | Purpose |
+|---------|---------|
+| `omarchy-webapps status` | Show the detected browser and which backend it will use |
+| `omarchy-webapps doctor` | Diagnose the whole path, including the PATH trap and browser prefs |
+| `omarchy-webapps relink` | Point existing web app `.desktop` entries at this launcher (absolute) |
+| `omarchy-webapps list` | List web apps the browser has registered (Taskbar Tabs backends) |
+| `omarchy-webapps hypr-rules` | Print Hyprland window rules for per-app web app windows |
+| `omarchy-webapps chrome-css install\|remove` | Install/remove the chrome-less styling for Gecko Taskbar Tabs |
+
+Configuration lives in `~/.config/omarchy-webapps/config` (KEY=value):
+
+| Key | Purpose |
+|-----|---------|
+| `browser=<name>.desktop` | Force a browser instead of the XDG default |
+| `backend=<backend>` | Force `chromium-app` / `gecko-taskbartab` / `plain-window` |
+| `launch_prefix=<cmd>` | Override the launch wrapper (default: `uwsm-app` if present) |
+
+## Backends
+
+| backend | command shape | notes |
+|---------|---------------|-------|
+| `chromium-app` | `<bin> --app=<url>` | what Omarchy ships |
+| `gecko-taskbartab` | `<bin> -taskbar-tab <id> -new-window <url> -profile <p> -container 0` | Firefox Taskbar Tabs |
+| `plain-window` | `<bin> --new-window <url>` | honest fallback |
+
+Browser family mapping:
+
+- **Chromium family** (`chromium-app`): chromium, chrome, brave, edge, vivaldi, opera, helium
+- **Gecko family** (`gecko-taskbartab`, or `plain-window` without Taskbar Tabs): zen, firefox, librewolf, waterfox, floorp, mullvad
+
+`gecko-taskbartab` reuses your normal profile — the same cookies, logins and
+extensions as ordinary browsing — and gives each web app its own Wayland
+`app_id`, so the compositor can style every one individually. See below.
+
+## Browser support
+
+Only **Zen** and **Chromium** are installed and tested on this machine
+(2026-08-25). Firefox, LibreWolf, Waterfox, Floorp, Brave, Edge, Vivaldi and Opera
+are supported *by code path only* and have **never been run**. The code is
+expected to work, but treat those as untested.
+
+## Gecko setup
+
+For a Gecko browser (Zen, Firefox, …) to use Taskbar Tabs:
+
+1. Add to `<profile>/user.js`:
+   ```js
+   user_pref("browser.taskbarTabs.enabled", true);
+   ```
+2. Restart the browser.
+
+Optionally remove the web app chrome for a clean app look:
+
+```bash
+omarchy-webapps chrome-css install
+```
+
+This needs `toolkit.legacyUserProfileCustomizations.stylesheets=true` set in the
+same `user.js`.
+
+## Hyprland
+
+Each web app gets its own Wayland `app_id`, `zen.webapp-<uuid>`, so it can be
+styled individually without matching the whole browser. `omarchy-webapps
+hypr-rules` prints:
+
+```js
+-- Web app windows get their own Wayland app_id: zen.webapp-<uuid>.
+-- Put this in a file required AFTER any file that sets opacity by tag, since the
+-- last matching rule wins for a given property.
+
+o.window("^(zen\\.webapp-)", {
+  border_size = 0,
+  no_shadow = true,
+  opacity = "1 1",
+})
+```
+
+The ordering caveat matters: Hyprland takes the **last** matching rule per
+property. If an earlier file sets opacity by tag, this rule must load after it or
+the tag-based opacity wins. Note `class:zen` rules do **not** match web app
+windows.
+
+## The PATH trap
+
+`~/.local/bin` does not reliably shadow Omarchy's bin:
+
+| context | first on PATH | wins |
+|---------|---------------|------|
+| interactive shell | `~/bin` / `~/.local/bin` | the override |
+| Hyprland keybindings | `~/bin` | the override |
+| systemd user env / quickshell / `uwsm-app` | `/usr/share/omarchy/bin` | **the packaged script** |
+
+So `.desktop` entries must name the launcher by **absolute path** — a bare
+`Exec=omarchy-launch-webapp` can resolve to the packaged script that does not do
+web apps properly. Omarchy's own protocol handlers (`omarchy-webapp-handler-hey`,
+`-zoom`) call `omarchy-launch-webapp` by bare name internally, so `relink` also
+generates thin `~/bin` wrappers that only prepend this project's `bin` to PATH
+and delegate — upstream handler logic stays intact.
+
+This is the single most useful thing in this project: `omarchy-webapps relink`
+rewrites every web app `.desktop` entry to an absolute path and is safe to
+re-run. Backups land in `~/.local/state/omarchy-webapps/relink/`.
+
+## How it works
+
+- Taskbar Tabs registry: `<profile>/taskbartabs/taskbartabs.json`, entries keyed
+  by `scopes[].hostname`.
+- **Host lookup** is what keeps a web app stable. Passing a Taskbar Tab `id` the
+  browser does not already know makes it mint a brand new web app — new uuid,
+  new `.desktop`, fresh icon fetch — on **every** launch. The launcher looks the
+  host up first and reuses the existing tab.
+- On a web app's first launch the browser writes its own `.desktop` entry; a
+  small background watcher marks it `NoDisplay=true` so it does not duplicate the
+  launcher entry that called us. Hiding rather than deleting keeps the
+  `app_id` → icon mapping working.
+
+## Tests
+
+```bash
+./tests/test.sh
+```
+
+Pure-bash, builds a disposable tree under `mktemp -d`, touches nothing real.
+
+## Uninstall
+
+```bash
+./uninstall.sh
+```
+
+Removes the installed symlinks. Web app `.desktop` entries keep pointing at the
+repo after that, so restore them from the newest backup under
+`~/.local/state/omarchy-webapps/relink/` to get the original Omarchy behaviour
+back.
+
+## Licence
+
+MIT — see [LICENSE](./LICENSE). © 2026 Zheng Zexi.

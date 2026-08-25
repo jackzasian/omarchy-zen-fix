@@ -1,0 +1,49 @@
+
+/* omarchy-webapps:chrome-less
+ *
+ * Chrome-less styling for Taskbar Tabs web app windows.
+ *
+ * Everything is scoped to :root[taskbartab], the attribute TaskbarTabsChrome.init
+ * sets on web app windows only, so ordinary browser windows are untouched.
+ * Requires toolkit.legacyUserProfileCustomizations.stylesheets=true.
+ */
+
+:root[taskbartab] #nav-bar,
+:root[taskbartab] #navigator-toolbox,
+:root[taskbartab] #zen-appcontent-navbar-container,
+:root[taskbartab] #titlebar {
+  display: none !important;
+}
+
+/* Content edge-to-edge. The Zen-specific variables are harmless on other forks. */
+:root[taskbartab] {
+  --zen-element-separation: 0px !important;
+  --zen-appcontent-separation: 0px !important;
+}
+
+:root[taskbartab] #zen-main-app-wrapper,
+:root[taskbartab] #zen-tabbox-wrapper,
+:root[taskbartab] #appcontent,
+:root[taskbartab] #tabbrowser-tabbox,
+:root[taskbartab] #tabbrowser-tabpanels,
+:root[taskbartab] .browserStack,
+:root[taskbartab] browser {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Zen rounds its own window on Linux via
+ *   --zen-border-radius: env(-moz-gtk-csd-titlebar-radius, 8px)
+ * set as an INLINE style by zenThemeModifier.js, hence !important. Left alone it
+ * double-arcs against the compositor's own rounding. */
+:root[taskbartab] {
+  --zen-border-radius: 0px !important;
+  --zen-webview-border-radius: 0px !important;
+  --zen-native-inner-radius: 0px !important;
+  border-radius: 0 !important;
+}
+
+/* omarchy-webapps:chrome-less end */

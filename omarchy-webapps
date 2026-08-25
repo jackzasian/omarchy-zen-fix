@@ -1,0 +1,297 @@
+#!/bin/bash
+
+# omarchy-webapps -- run Omarchy web apps in the browser you actually use.
+# See README.md. MIT licensed.
+
+set -euo pipefail
+
+OW_ROOT_DIR=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd -P)
+OW_LIB_DIR="$OW_ROOT_DIR/lib"
+OW_BIN_DIR="$OW_ROOT_DIR/bin"
+# shellcheck source=lib/common.sh
+source "$OW_LIB_DIR/common.sh"
+# shellcheck source=lib/browsers.sh
+source "$OW_LIB_DIR/browsers.sh"
+
+usage() {
+  cat <<'USAGE'
+omarchy-webapps <command>
+
+  status     Show the detected browser and which backend it will use
+  doctor     Diagnose the whole path, including the PATH trap and browser prefs
+  relink     Point existing web app .desktop entries at this launcher (absolute)
+  list       List web apps the browser has registered (Taskbar Tabs backends)
+  hypr-rules Print Hyprland window rules for per-app web app windows
+  chrome-css Install/remove the chrome-less styling for Gecko Taskbar Tabs
+             (chrome-css install | chrome-css remove)
+
+Environment / config (~/.config/omarchy-webapps/config, KEY=value):
+  browser=<name>.desktop   Force a browser instead of the XDG default
+  backend=<backend>        Force chromium-app | gecko-taskbartab | plain-window
+  launch_prefix=<cmd>      Override the launch wrapper (default: uwsm-app if present)
+USAGE
+}
+
+backend_blurb() {
+  case "$1" in
+  chromium-app)     printf 'Chromium --app= window (shared profile)' ;;
+  gecko-taskbartab) printf "Firefox Taskbar Tabs (shared profile, per-app app_id)" ;;
+  plain-window)     printf 'ordinary browser window (no SSB support detected)' ;;
+  *)                printf '%s' "$1" ;;
+  esac
+}
+
+cmd_status() {
+  load_config
+  if ! ow_resolve_browser; then
+    bad_mark "no browser resolved (is a default web browser set?)"
+    return 1
+  fi
+  say "browser  : $OW_R_DESKTOP"
+  say "binary   : $OW_R_BIN"
+  say "family   : $OW_R_FAMILY"
+  say "backend  : $OW_R_BACKEND  ($(backend_blurb "$OW_R_BACKEND"))"
+  [[ -n $OW_R_PROFILE ]] && say "profile  : $OW_R_PROFILE"
+  return 0
+}
+
+# The trap that makes name-shadowing unreliable: in a graphical session the
+# packaged Omarchy bin can precede ~/.local/bin on PATH, so .desktop launches
+# resolve to the packaged script even when a shell resolves to this one.
+check_path_order() {
+  local self mine
+  mine=$(readlink -f -- "$OW_BIN_DIR/omarchy-launch-webapp")
+  self=$(command -v omarchy-launch-webapp 2>/dev/null || true)
+  if [[ -z $self ]]; then
+    warn_mark "omarchy-launch-webapp is not on PATH"
+    return
+  fi
+  if [[ $(readlink -f -- "$self") == "$mine" ]]; then
+    ok_mark "PATH resolves omarchy-launch-webapp to this project (in this shell)"
+  else
+    warn_mark "PATH resolves omarchy-launch-webapp to $self, not this project"
+  fi
+
+  local gui_path
+  gui_path=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^PATH=//p') || true
+  if [[ -n $gui_path ]]; then
+    local first_hit
+    first_hit=$(env -i PATH="$gui_path" bash -c 'command -v omarchy-launch-webapp' 2>/dev/null || true)
+    if [[ -n $first_hit && $(readlink -f -- "$first_hit" 2>/dev/null) != "$mine" ]]; then
+      warn_mark "graphical session PATH resolves to $first_hit"
+      say "         -> run 'omarchy-webapps relink' so .desktop entries name this launcher by absolute path"
+    else
+      ok_mark "graphical session PATH is not a problem"
+    fi
+  fi
+}
+
+cmd_doctor() {
+  local failures=0
+  load_config
+
+  if ow_resolve_browser; then
+    ok_mark "browser: $OW_R_DESKTOP -> $OW_R_BIN"
+    ok_mark "backend: $OW_R_BACKEND ($(backend_blurb "$OW_R_BACKEND"))"
+  else
+    bad_mark "could not resolve a browser"
+    failures=$((failures + 1))
+  fi
+
+  if [[ ${OW_R_FAMILY:-} == gecko ]]; then
+    local program_dir hint
+    hint=${OW_R_DESKTOP%.desktop}; hint=${hint,,}
+    program_dir=$(ow_gecko_program_dir "$OW_R_BIN" "$hint")
+    if ow_gecko_has_taskbartabs "$program_dir"; then
+      ok_mark "browser ships Taskbar Tabs (modules/taskbartabs/ in omni.ja)"
+      if [[ -n $OW_R_PROFILE ]] && grep -rqs 'browser.taskbarTabs.enabled".*true' \
+           "$OW_R_PROFILE/prefs.js" "$OW_R_PROFILE/user.js"; then
+        ok_mark "browser.taskbarTabs.enabled is set"
+      else
+        warn_mark "browser.taskbarTabs.enabled is NOT set -- web apps will open as ordinary windows"
+        say "         -> add  user_pref(\"browser.taskbarTabs.enabled\", true);  to $OW_R_PROFILE/user.js and restart the browser"
+      fi
+    else
+      warn_mark "browser does not ship Taskbar Tabs; falling back to $OW_R_BACKEND"
+    fi
+  fi
+
+  check_path_order
+
+  local stale=0 entry exec_line
+  for entry in "$OW_APPS_DIR"/*.desktop; do
+    [[ -f $entry ]] || continue
+    exec_line=$(grep -m1 '^Exec=' "$entry" 2>/dev/null) || continue
+    case "$exec_line" in
+    "Exec=omarchy-launch-webapp "*|"Exec=omarchy-launch-or-focus-webapp "*|"Exec=omarchy-webapp-handler-"*)
+      stale=$((stale + 1)) ;;
+    esac
+  done
+  if ((stale)); then
+    warn_mark "$stale web app entry/entries still use a bare command name -- run 'omarchy-webapps relink'"
+  else
+    ok_mark "no web app entries rely on PATH"
+  fi
+
+  say ""
+  if ((failures)); then
+    say "doctor: $failures failure(s)"
+    return 1
+  fi
+  say "doctor: no failures"
+}
+
+# Wrappers for Omarchy's protocol handlers (mailto for HEY, zoommtg for Zoom).
+# They exec `omarchy-launch-webapp` by bare name, so all a wrapper has to do is
+# put this project's bin first on PATH and delegate -- no logic is duplicated,
+# so upstream changes to the handler still apply.
+ensure_handler_wrapper() {
+  local name=$1 target="$OW_BIN_DIR/$1"
+  [[ -x "$OW_PACKAGED_BIN/$name" ]] || return 1
+  [[ -x $target ]] && return 0
+  cat >"$target" <<WRAP
+#!/bin/bash
+
+# Generated by 'omarchy-webapps relink'.
+# $OW_PACKAGED_BIN/$name resolves omarchy-launch-webapp by bare name; putting
+# this project's bin first on PATH is the whole job.
+
+exec env PATH="$OW_BIN_DIR:\$PATH" "$OW_PACKAGED_BIN/$name" "\$@"
+WRAP
+  chmod +x "$target"
+}
+
+cmd_relink() {
+  local dry=0
+  [[ ${1:-} == --dry-run ]] && dry=1
+
+  local backup_dir changed=0 entry exec_line new handler
+  backup_dir="$OW_STATE_DIR/relink/$(date -u +%Y%m%dT%H%M%SZ)"
+
+  for entry in "$OW_APPS_DIR"/*.desktop; do
+    [[ -f $entry ]] || continue
+    exec_line=$(grep -m1 '^Exec=' "$entry" 2>/dev/null) || continue
+    new=""
+
+    case "$exec_line" in
+    "Exec=omarchy-launch-webapp "*)
+      new="Exec=$OW_BIN_DIR/omarchy-launch-webapp ${exec_line#Exec=omarchy-launch-webapp }" ;;
+    "Exec="*"/omarchy-launch-webapp "*)
+      # Ad-hoc shim referenced by absolute path (e.g. the old ~/bin one): still
+      # re-point it at this project so the shim can be deleted afterwards.
+      # `#` (not `##`) so a URL that happens to contain the shim path survives.
+      new="Exec=$OW_BIN_DIR/omarchy-launch-webapp ${exec_line#Exec=*/omarchy-launch-webapp }" ;;
+    "Exec=omarchy-launch-or-focus-webapp "*)
+      ensure_handler_wrapper omarchy-launch-or-focus-webapp || continue
+      new="Exec=$OW_BIN_DIR/omarchy-launch-or-focus-webapp ${exec_line#Exec=omarchy-launch-or-focus-webapp }" ;;
+    "Exec=omarchy-webapp-handler-"*)
+      handler=${exec_line#Exec=}; handler=${handler%% *}
+      ensure_handler_wrapper "$handler" || continue
+      new="Exec=$OW_BIN_DIR/$handler ${exec_line#Exec=$handler }" ;;
+    *) continue ;;
+    esac
+
+    [[ $new == "$exec_line" ]] && continue
+
+    if ((dry)); then
+      printf 'would rewrite %s\n  %s\n  -> %s\n' "$(basename "$entry")" "$exec_line" "$new"
+      continue
+    fi
+
+    mkdir -p "$backup_dir"
+    cp -a "$entry" "$backup_dir/"
+    awk -v repl="$new" '!done && /^Exec=/ { print repl; done=1; next } { print }' \
+      "$entry" >"$entry.tmp" && mv "$entry.tmp" "$entry"
+    say "rewrote $(basename "$entry")"
+    changed=$((changed + 1))
+  done
+
+  ((dry)) && return 0
+  ((changed)) && say "Backed up $changed original(s): $backup_dir"
+  update-desktop-database "$OW_APPS_DIR" 2>/dev/null || true
+  say "Done: $changed entry/entries now point at omarchy-webapps."
+}
+
+cmd_list() {
+  load_config
+  ow_resolve_browser || die "no browser resolved"
+  [[ $OW_R_BACKEND == gecko-taskbartab ]] || die "list is only meaningful for the gecko-taskbartab backend"
+  OW_REGISTRY="$OW_R_PROFILE/taskbartabs/taskbartabs.json" python3 - <<'PY'
+import json, os, sys
+try:
+    data = json.load(open(os.environ["OW_REGISTRY"]))
+except (OSError, ValueError):
+    print("no web apps registered yet")
+    sys.exit(0)
+tabs = data.get("taskbarTabs", [])
+if not tabs:
+    print("no web apps registered yet")
+for t in tabs:
+    hosts = ", ".join(s.get("hostname", "?") for s in t.get("scopes", []))
+    print("%-28s %-34s %s" % (t.get("name", "?"), hosts, t.get("id", "?")))
+PY
+}
+
+cmd_hypr_rules() {
+  load_config
+  ow_resolve_browser >/dev/null 2>&1 || true
+  local prgname=zen
+  [[ -n ${OW_R_DESKTOP:-} ]] && prgname=${OW_R_DESKTOP%.desktop}
+  cat <<RULES
+-- Web app windows get their own Wayland app_id: ${prgname}.webapp-<uuid>.
+-- Put this in a file required AFTER any file that sets opacity by tag, since the
+-- last matching rule wins for a given property.
+
+o.window("^(${prgname}\\\\.webapp-)", {
+  border_size = 0,
+  no_shadow = true,
+  opacity = "1 1",
+})
+RULES
+}
+
+cmd_chrome_css() {
+  load_config
+  ow_resolve_browser || die "no browser resolved"
+  [[ $OW_R_FAMILY == gecko ]] || die "chrome-css only applies to Gecko browsers"
+  [[ -n $OW_R_PROFILE ]] || die "could not find the browser profile"
+
+  local target="$OW_R_PROFILE/chrome/userChrome.css"
+  local marker="omarchy-webapps:chrome-less"
+
+  case "${1:-}" in
+  install)
+    mkdir -p "$(dirname "$target")"
+    if [[ -f $target ]] && grep -q "$marker" "$target"; then
+      say "already installed: $target"
+      return 0
+    fi
+    [[ -f $target ]] && cp -a "$target" "$target.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+    cat "$OW_ROOT_DIR/share/webapp-chrome.css" >>"$target"
+    say "installed chrome-less styling into $target"
+    say "Also set toolkit.legacyUserProfileCustomizations.stylesheets=true, then restart the browser."
+    ;;
+  remove)
+    [[ -f $target ]] || { say "nothing to remove"; return 0; }
+    cp -a "$target" "$target.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+    awk -v m="$marker" '
+      $0 ~ ("/\\* " m) { skip=1 }
+      skip && $0 ~ (m " end \\*/") { skip=0; next }
+      !skip { print }' "$target" >"$target.tmp" && mv "$target.tmp" "$target"
+    say "removed chrome-less styling from $target"
+    ;;
+  *)
+    die "usage: omarchy-webapps chrome-css install|remove" ;;
+  esac
+}
+
+case "${1:-}" in
+status)     shift; cmd_status "$@" ;;
+doctor)     shift; cmd_doctor "$@" ;;
+relink)     shift; cmd_relink "$@" ;;
+list)       shift; cmd_list "$@" ;;
+hypr-rules) shift; cmd_hypr_rules "$@" ;;
+chrome-css) shift; cmd_chrome_css "$@" ;;
+-h|--help|help|"") usage ;;
+*) usage; exit 1 ;;
+esac

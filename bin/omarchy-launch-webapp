@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# omarchy:summary=Launch a URL as a web app in the browser you actually use
+# omarchy:args=<url> [extra-browser-flags...]
+#
+# Drop-in replacement for /usr/share/omarchy/bin/omarchy-launch-webapp.
+#
+# The packaged script only understands Chromium's --app= flag and falls back to
+# chromium.desktop for every other browser, so a Gecko default browser (Zen,
+# Firefox, LibreWolf) never gets the web app. This routes to the best backend the
+# chosen browser actually supports -- see lib/browsers.sh.
+
+set -euo pipefail
+
+OW_LIB_DIR=${OW_LIB_DIR:-"$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../lib" && pwd -P)"}
+# shellcheck source=../lib/common.sh
+source "$OW_LIB_DIR/common.sh"
+# shellcheck source=../lib/browsers.sh
+source "$OW_LIB_DIR/browsers.sh"
+
+URL=${1:-}
+[[ -n $URL ]] || die "usage: omarchy-launch-webapp <url> [extra-flags...]"
+shift
+
+load_config
+
+if ! ow_resolve_browser; then
+  # Nothing usable detected: hand back to the packaged script rather than guess.
+  if [[ -x $OW_PACKAGED_BIN/omarchy-launch-webapp ]]; then
+    exec "$OW_PACKAGED_BIN/omarchy-launch-webapp" "$URL" "$@"
+  fi
+  die "could not resolve a browser (is a default web browser set?)"
+fi
+
+read -r -a PREFIX <<<"$(launch_prefix)"
+
+case "$OW_R_BACKEND" in
+chromium-app)
+  exec "${PREFIX[@]}" "$OW_R_BIN" --app="$URL" "$@"
+  ;;
+
+gecko-taskbartab)
+  if lookup=$(ow_taskbartab_lookup "$OW_R_PROFILE" "$URL"); then
+    id=${lookup%%$'\t'*}
+    container=${lookup##*$'\t'}
+  else
+    id=$(uuidgen)
+    container=0
+    # First launch of this host: the browser mints the web app and writes its own
+    # desktop entry. Hide that copy so it does not duplicate the launcher entry
+    # that called us -- hiding rather than deleting keeps app_id -> icon working.
+    "$OW_LIB_DIR/../bin/omarchy-webapps-hide-generated" &
+  fi
+  exec "${PREFIX[@]}" "$OW_R_BIN" \
+    -taskbar-tab "$id" \
+    -new-window "$URL" \
+    -profile "$OW_R_PROFILE" \
+    -container "$container" \
+    "$@"
+  ;;
+
+plain-window)
+  exec "${PREFIX[@]}" "$OW_R_BIN" --new-window "$URL" "$@"
+  ;;
+
+*)
+  die "unknown backend: $OW_R_BACKEND"
+  ;;
+esac
