@@ -151,10 +151,76 @@ t_gecko_has_taskbartabs() {
   ok "ow_gecko_has_taskbartabs fails on missing/non-jar"
 }
 
+
+t_relink_adopts_handlers() {
+  local apps="$TMP/apps2" state="$TMP/state2" pkg="$TMP/pkgbin" bespoke_orig line
+  mkdir -p "$apps" "$pkg"
+
+  # A handler Omarchy ships -- relink should wrap it and adopt the ad-hoc path.
+  printf '#!/bin/bash\nexec omarchy-launch-webapp x\n' >"$pkg/omarchy-webapp-handler-zoom"
+  chmod +x "$pkg/omarchy-webapp-handler-zoom"
+  printf 'Exec=/home/someone/bin/omarchy-webapp-handler-zoom %%u\n' >"$apps/Zoom.desktop"
+
+  # A handler Omarchy does NOT ship -- nothing to wrap, must be left alone.
+  printf 'Exec=/home/someone/bin/omarchy-webapp-handler-proton %%u\n' >"$apps/Proton.desktop"
+  bespoke_orig=$(cat "$apps/Proton.desktop")
+
+  env OW_APPS_DIR="$apps" OW_STATE_DIR="$state" OW_PACKAGED_BIN="$pkg" \
+    "$ROOT/omarchy-webapps" relink >/dev/null
+
+  line=$(grep -m1 '^Exec=' "$apps/Zoom.desktop")
+  [[ $line == "Exec=$state/bin/omarchy-webapp-handler-zoom %u" ]] \
+    || { bad "relink should adopt an ad-hoc handler wrapper (got '$line')"; return; }
+  [[ -x "$state/bin/omarchy-webapp-handler-zoom" ]] \
+    || { bad "relink should generate the wrapper in the state dir"; return; }
+  [[ ! -e "$ROOT/bin/omarchy-webapp-handler-zoom" ]] \
+    || { bad "relink must not write generated wrappers into the checkout"; return; }
+  [[ $(cat "$apps/Proton.desktop") == "$bespoke_orig" ]] \
+    || { bad "relink should leave a handler Omarchy does not ship untouched"; return; }
+  ok "relink adopts packaged handlers into state, leaves bespoke ones alone"
+}
+
+t_relink_quoted_exec() {
+  local apps="$TMP/apps3" state="$TMP/state3" line
+  mkdir -p "$apps"
+  printf 'Exec="/home/some one/bin/omarchy-launch-webapp" https://x.com/\n' >"$apps/Q.desktop"
+  env OW_APPS_DIR="$apps" OW_STATE_DIR="$state" "$ROOT/omarchy-webapps" relink >/dev/null
+  line=$(grep -m1 '^Exec=' "$apps/Q.desktop")
+  [[ $line == "Exec=$ROOT/bin/omarchy-launch-webapp https://x.com/" ]] \
+    || { bad "relink should handle a quoted command path (got '$line')"; return; }
+  ok "relink handles a quoted Exec command path"
+}
+
+t_path_shim() {
+  local state="$TMP/state4" envd="$TMP/envd" out
+  mkdir -p "$envd"
+
+  env OW_STATE_DIR="$state" OW_ENV_DIR="$envd" "$ROOT/omarchy-webapps" path-shim install >/dev/null
+  [[ -L "$state/shim/omarchy-launch-webapp" ]] \
+    || { bad "path-shim install should create the shim symlink"; return; }
+  [[ $(readlink -f -- "$state/shim/omarchy-launch-webapp") == "$ROOT/bin/omarchy-launch-webapp" ]] \
+    || { bad "shim should point at this project's launcher"; return; }
+  [[ -f "$envd/60-omarchy-webapps.conf" ]] \
+    || { bad "path-shim install should write the environment.d file"; return; }
+  grep -q "PATH=$state/shim:\${PATH}" "$envd/60-omarchy-webapps.conf" \
+    || { bad "environment.d file should prepend the shim dir"; return; }
+  # Shadowing exactly one command is the whole point of the design.
+  [[ $(find "$state/shim" -mindepth 1 | wc -l) -eq 1 ]] \
+    || { bad "shim dir must contain exactly one entry"; return; }
+
+  out=$(env OW_STATE_DIR="$state" OW_ENV_DIR="$envd" "$ROOT/omarchy-webapps" path-shim remove)
+  [[ ! -e "$envd/60-omarchy-webapps.conf" && ! -d "$state/shim" ]] \
+    || { bad "path-shim remove should clean up (got: $out)"; return; }
+  ok "path-shim install/remove roundtrip, shadows exactly one command"
+}
+
 t_browser_family
 t_taskbartab_lookup
 t_gecko_default_profile
 t_relink
+t_relink_adopts_handlers
+t_relink_quoted_exec
+t_path_shim
 t_gecko_has_taskbartabs
 
 printf '\n'

@@ -30,6 +30,8 @@ omarchy-webapps doctor
 | `omarchy-webapps list` | List web apps the browser has registered (Taskbar Tabs backends) |
 | `omarchy-webapps hypr-rules` | Print Hyprland window rules for per-app web app windows |
 | `omarchy-webapps chrome-css install\|remove` | Install/remove the chrome-less styling for Gecko Taskbar Tabs |
+| `omarchy-webapps path-shim install\|remove\|status` | Make packaged Omarchy callers that use the bare command name reach this launcher |
+| `omarchy-webapps version` | Print the version |
 
 Configuration lives in `~/.config/omarchy-webapps/config` (KEY=value):
 
@@ -115,16 +117,40 @@ windows.
 | Hyprland keybindings | `~/bin` | the override |
 | systemd user env / quickshell / `uwsm-app` | `/usr/share/omarchy/bin` | **the packaged script** |
 
-So `.desktop` entries must name the launcher by **absolute path** — a bare
-`Exec=omarchy-launch-webapp` can resolve to the packaged script that does not do
-web apps properly. Omarchy's own protocol handlers (`omarchy-webapp-handler-hey`,
-`-zoom`) call `omarchy-launch-webapp` by bare name internally, so `relink` also
-generates thin `~/bin` wrappers that only prepend this project's `bin` to PATH
-and delegate — upstream handler logic stays intact.
+There are three kinds of caller, and each needs a different answer.
 
-This is the single most useful thing in this project: `omarchy-webapps relink`
-rewrites every web app `.desktop` entry to an absolute path and is safe to
-re-run. Backups land in `~/.local/state/omarchy-webapps/relink/`.
+**1. `.desktop` entries — solved by `relink`.** A bare
+`Exec=omarchy-launch-webapp` can resolve to the packaged script, so `relink`
+rewrites every web app entry to an **absolute path**. It is idempotent, and
+backs originals up to `~/.local/state/omarchy-webapps/relink/`.
+
+**2. Omarchy's protocol handlers — solved by `relink` too.** Handlers like
+`omarchy-webapp-handler-zoom` call `omarchy-launch-webapp` by bare name
+*internally*, so `relink` generates a thin wrapper that only prepends this
+project's `bin` to PATH and delegates — upstream handler logic stays intact.
+Wrappers are generated into `~/.local/state/omarchy-webapps/bin/`, never into the
+checkout. A handler Omarchy does not ship (one you wrote yourself) has nothing to
+wrap, so `relink` reports it and leaves it alone.
+
+**3. Packaged callers you do not control — solved by `path-shim`.** Omarchy's
+menu (`omarchy-menu.jsonc`) hard-codes bare `omarchy-launch-webapp` for its
+"Learn" entries, and runs under the systemd/quickshell PATH. There is no
+`.desktop` file to rewrite. `omarchy-webapps path-shim install` fixes this
+properly:
+
+```bash
+omarchy-webapps path-shim install
+```
+
+It creates a directory containing **exactly one symlink**
+(`omarchy-launch-webapp`) and prepends that directory to the graphical session
+PATH via `~/.config/environment.d/60-omarchy-webapps.conf`. Shadowing one command
+rather than reordering `/usr/share/omarchy/bin` wholesale is deliberate: putting
+`~/bin` first would silently change which `omarchy-audio-output-switch` — and
+every other Omarchy command — you get. New graphical sessions pick it up
+automatically; already-running processes keep the PATH they started with, so
+Hyprland keybindings change only after the next login. `path-shim remove` undoes
+it.
 
 ## How it works
 

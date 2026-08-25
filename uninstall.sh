@@ -19,6 +19,19 @@ for name in omarchy-webapps omarchy-launch-webapp; do
   fi
 done
 
+ENV_FILE=${OW_ENV_FILE:-"${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/60-omarchy-webapps.conf"}
+if [[ -f $ENV_FILE ]]; then
+  rm -f -- "$ENV_FILE"
+  printf 'removed %s\n' "$ENV_FILE"
+fi
+
+for dir in "$STATE_DIR/shim" "$STATE_DIR/bin"; do
+  if [[ -d $dir ]]; then
+    rm -rf -- "$dir"
+    printf 'removed %s\n' "$dir"
+  fi
+done
+
 latest=$(ls -1d "$STATE_DIR"/relink/* 2>/dev/null | tail -1 || true)
 if [[ -n $latest ]]; then
   printf '\nOriginal .desktop entries are backed up in:\n  %s\n' "$latest"

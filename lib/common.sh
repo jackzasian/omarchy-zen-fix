@@ -3,11 +3,24 @@
 # Shared helpers. Sourced by bin/* and the omarchy-webapps dispatcher.
 
 OW_NAME=omarchy-webapps
+# shellcheck disable=SC2034 # consumed by the omarchy-webapps dispatcher.
+OW_VERSION=1.0.0
 OW_CONFIG_DIR=${OW_CONFIG_DIR:-"${XDG_CONFIG_HOME:-$HOME/.config}/$OW_NAME"}
 OW_CONFIG_FILE=${OW_CONFIG_FILE:-"$OW_CONFIG_DIR/config"}
 OW_STATE_DIR=${OW_STATE_DIR:-"${XDG_STATE_HOME:-$HOME/.local/state}/$OW_NAME"}
 OW_APPS_DIR=${OW_APPS_DIR:-"${XDG_DATA_HOME:-$HOME/.local/share}/applications"}
 OW_PACKAGED_BIN=${OW_PACKAGED_BIN:-/usr/share/omarchy/bin}
+
+# Generated protocol-handler wrappers live in state, never in the checkout, so
+# `relink` never dirties the git working tree.
+OW_GEN_BIN_DIR=${OW_GEN_BIN_DIR:-"$OW_STATE_DIR/bin"}
+
+# A directory holding exactly ONE symlink (omarchy-launch-webapp), prepended to
+# the graphical session PATH by `path-shim install`. Shadowing a single command
+# rather than reordering whole directories is deliberate -- see README.
+OW_SHIM_DIR=${OW_SHIM_DIR:-"$OW_STATE_DIR/shim"}
+OW_ENV_DIR=${OW_ENV_DIR:-"${XDG_CONFIG_HOME:-$HOME/.config}/environment.d"}
+OW_ENV_FILE=${OW_ENV_FILE:-"$OW_ENV_DIR/60-omarchy-webapps.conf"}
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
