@@ -213,7 +213,7 @@ PY
 # Sets: OW_R_DESKTOP OW_R_BIN OW_R_FAMILY OW_R_BACKEND OW_R_PROFILE
 ow_resolve_browser() {
   OW_R_DESKTOP=$(ow_browser_desktop)
-  OW_R_BIN=""; OW_R_FAMILY="unknown"; OW_R_BACKEND="plain-window"; OW_R_PROFILE=""; OW_R_PROGRAM_DIR=""
+  OW_R_BIN=""; OW_R_FAMILY="unknown"; OW_R_BACKEND="plain-window"; OW_R_PROFILE=""
 
   [[ -n $OW_R_DESKTOP ]] || return 1
   OW_R_BIN=$(ow_desktop_binary "$OW_R_DESKTOP") || return 1
@@ -235,7 +235,6 @@ ow_resolve_browser() {
        && ow_gecko_has_taskbartabs "$program_dir" \
        && [[ -n $OW_R_PROFILE ]]; then
       OW_R_BACKEND="gecko-taskbartab"
-      OW_R_PROGRAM_DIR=$program_dir
       if real_bin=$(ow_gecko_binary_in "$program_dir" "$hint"); then
         OW_R_BIN=$real_bin
       fi
@@ -246,6 +245,7 @@ ow_resolve_browser() {
   esac
 
   # An explicit backend in config overrides detection.
+  # shellcheck disable=SC2034 # OW_R_BACKEND is consumed by callers in this repo.
   [[ -n ${OW_BACKEND:-} ]] && OW_R_BACKEND=$OW_BACKEND
   return 0
 }
